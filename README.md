@@ -44,7 +44,7 @@ Body:   { "jd": number, "lat"?: number, "lon"?: number }
 ### GET /v1/source
 
 ```json
-{ "license": "AGPL-3.0-or-later", "source": "<repo url placeholder>" }
+{ "license": "AGPL-3.0-or-later", "source": "https://github.com/samuel-dunlap/ephemeris-service" }
 ```
 
 AGPL section 13 convenience: this endpoint names the license and points to the

@@ -159,7 +159,7 @@ async function handleHealth(): Promise<Response> {
 function handleSource(): Response {
   return json({
     license: "AGPL-3.0-or-later",
-    source: "<repo url placeholder>",
+    source: "https://github.com/samuel-dunlap/ephemeris-service",
   });
 }
 
