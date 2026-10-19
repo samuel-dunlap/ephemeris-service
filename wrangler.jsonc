@@ -1,0 +1,19 @@
+{
+  // Swiss Ephemeris WASM microservice.
+  // Reached only via a Cloudflare service binding — no public routes.
+  "name": "ephemeris-service",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-09-27",
+  "workers_dev": false,
+
+  // INTERNAL_SECRET: set via `wrangler secret put INTERNAL_SECRET`
+  // If unset at runtime the worker returns 503 on every request (fail closed).
+
+  // Module rules for non-JS imports (also mirrored in vitest.config.ts):
+  //  - .wasm → pre-compiled WebAssembly.Module
+  //  - .se1  → ArrayBuffer (Swiss Ephemeris asteroid data)
+  "rules": [
+    { "type": "CompiledWasm", "globs": ["**/*.wasm"], "fallthrough": false },
+    { "type": "Data", "globs": ["**/*.se1"], "fallthrough": false }
+  ]
+}

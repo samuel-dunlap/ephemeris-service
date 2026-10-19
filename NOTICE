@@ -1,0 +1,20 @@
+NOTICE
+
+This software includes or is derived from the following third-party work:
+
+Swiss Ephemeris
+  Copyright (c) Astrodienst AG, Zurich, Switzerland
+  Authors: Dieter Koch and Alois Treindl
+  License: AGPL-3.0-or-later (or Swiss Ephemeris Professional License)
+  Website: https://www.astro.com/swisseph/
+  The astronomical calculations and ephemeris data are built on
+  NASA/JPL Development Ephemeris DE441.
+
+@kuntay/swisseph (swisseph-wasm)
+  Copyright (c) Kuntay Erkus
+  License: AGPL-3.0-or-later
+  Repository: https://github.com/kuntayerkus/swisseph-wasm
+  A WebAssembly port of Swiss Ephemeris 2.10.03 for JavaScript runtimes.
+  The Emscripten glue code (src/wasm/swisseph-glue.mjs) is a patched copy
+  of the upstream wasm/swisseph.mjs, modified to accept a pre-compiled
+  WebAssembly.Module for Cloudflare Workers compatibility.
