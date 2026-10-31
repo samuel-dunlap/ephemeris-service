@@ -13,6 +13,7 @@
 import {
   computePositions,
   computeHouses,
+  computeSiderealTime,
   getVersion,
   hasChiron,
   type Positions,
@@ -113,6 +114,7 @@ async function handleChart(
 
   // --- Compute ---
   const positions: Positions = await computePositions(jd);
+  const gst: number = await computeSiderealTime(jd);
 
   // Houses only when both lat and lon are provided
   let houses: HouseCusps | undefined;
@@ -123,21 +125,23 @@ async function handleChart(
   // --- Shape the response to match the contract ---
   const positionsOut: Record<
     string,
-    { lon: number; lat: number; speed: number; decl: number }
+    { lon: number; lat: number; speed: number; ra: number; decl: number }
   > = {};
   for (const [name, pos] of Object.entries(positions)) {
     positionsOut[name] = {
       lon: pos.lon,
       lat: pos.lat,
       speed: pos.speed,
+      ra: pos.ra,
       decl: pos.decl,
     };
   }
 
   const result: {
     positions: typeof positionsOut;
+    gst: number;
     houses?: { cusps: number[]; asc: number; mc: number };
-  } = { positions: positionsOut };
+  } = { positions: positionsOut, gst };
 
   if (houses) {
     result.houses = {

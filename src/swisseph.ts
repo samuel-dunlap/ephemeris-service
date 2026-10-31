@@ -68,6 +68,7 @@ export interface BodyPosition {
   lon: number;
   lat: number;
   speed: number;
+  ra: number;
   decl: number;
 }
 
@@ -128,6 +129,7 @@ interface CWraps {
     ascmcSpeed: number,
     err: number
   ) => number;
+  sidtime: (jd: number) => number;
   setEphePath: (path: string) => void;
   version: (buf: number) => string;
 }
@@ -195,13 +197,17 @@ async function createInstance(): Promise<SwissEphInstance> {
     "number",
   ]) as CWraps["housesEx2"];
 
+  const sidtime = em.cwrap("swe_sidtime", "number", [
+    "number",
+  ]) as CWraps["sidtime"];
+
   const version = em.cwrap("swe_version", "string", [
     "number",
   ]) as CWraps["version"];
 
   return {
     em,
-    c: { calcUt, housesEx2, setEphePath, version },
+    c: { calcUt, housesEx2, sidtime, setEphePath, version },
     bufPosition,
     bufError,
     bufCusps,
@@ -272,9 +278,9 @@ export async function computePositions(jd: number): Promise<Positions> {
       const msg = readError(em, bufError);
       throw new Error(`swe_calc_ut (equatorial) failed for ${name}: ${msg}`);
     }
-    const [, decl] = readDoubles(em, bufPosition, 2); // [RA, decl, ...]
+    const [ra, decl] = readDoubles(em, bufPosition, 2); // [RA, decl, ...]
 
-    result[name] = { lon, lat, speed: lonSpeed, decl };
+    result[name] = { lon, lat, speed: lonSpeed, ra, decl };
   }
 
   return result as Positions;
@@ -360,4 +366,15 @@ export async function hasChiron(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Compute Greenwich Sidereal Time for a Julian Day (UT).
+ * Uses Swiss Ephemeris swe_sidtime which includes nutation correction.
+ * Returns sidereal time in degrees (0–360).
+ */
+export async function computeSiderealTime(jd: number): Promise<number> {
+  const inst = await getSwissEph();
+  const hours = inst.c.sidtime(jd) as number;
+  return (hours * 15.0) % 360;
 }
