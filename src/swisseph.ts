@@ -13,13 +13,9 @@
  * of the isolate.
  */
 
-// @ts-expect-error — patched Emscripten glue (ESM, no types)
+// Module types are declared in src/types.d.ts (CompiledWasm, Data, Emscripten glue).
 import createSwissEphModule from "./wasm/swisseph-glue.mjs";
-
-// @ts-expect-error — CompiledWasm rule: gives WebAssembly.Module
 import wasmModule from "./wasm/swisseph.wasm";
-
-// @ts-expect-error — Data rule: gives ArrayBuffer
 import chironData from "../data/seas_18.se1";
 
 // ---------------------------------------------------------------------------
@@ -147,11 +143,11 @@ interface SwissEphInstance {
 }
 
 async function createInstance(): Promise<SwissEphInstance> {
-  const em: EmscriptenModule = await createSwissEphModule({
+  const em = await createSwissEphModule({
     wasmModule,
     print: () => {},
     printErr: () => {},
-  });
+  }) as EmscriptenModule;
 
   // Mount the Chiron asteroid ephemeris file into MEMFS
   try {
