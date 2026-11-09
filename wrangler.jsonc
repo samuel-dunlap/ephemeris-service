@@ -4,6 +4,7 @@
   "name": "ephemeris-service",
   "main": "src/index.ts",
   "compatibility_date": "2025-09-27",
+  "limits": { "cpu_ms": 300000, "subrequests": 10000 },
   "workers_dev": false,
 
   // INTERNAL_SECRET: set via `wrangler secret put INTERNAL_SECRET`
