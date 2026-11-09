@@ -80,6 +80,29 @@ async function postChart(
   return response;
 }
 
+async function postBatch(
+  body: unknown,
+  secret?: string
+): Promise<Response> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (secret !== undefined) {
+    headers["X-Internal-Secret"] = secret;
+  }
+
+  const request = new Request("http://localhost/v1/batch", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+
+  const ctx = createExecutionContext();
+  const response = await worker.fetch(request, makeEnv(), ctx);
+  await waitOnExecutionContext(ctx);
+  return response;
+}
+
 async function getPath(path: string): Promise<Response> {
   const request = new Request(`http://localhost${path}`, {
     method: "GET",
@@ -382,4 +405,285 @@ describe("Transit charts have no houses", () => {
       expect(data.houses).toBeUndefined();
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// POST /v1/batch — batch endpoint
+// ---------------------------------------------------------------------------
+
+describe("POST /v1/batch", () => {
+  // --- Auth ---
+
+  it("returns 401 on missing secret", async () => {
+    const res = await postBatch({ jds: [2451545.0] });
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 401 on wrong secret", async () => {
+    const res = await postBatch({ jds: [2451545.0] }, "wrong-secret");
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 503 when INTERNAL_SECRET env is unset", async () => {
+    const request = new Request("http://localhost/v1/batch", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Secret": "anything",
+      },
+      body: JSON.stringify({ jds: [2451545.0] }),
+    });
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(request, {} as any, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(503);
+  });
+
+  // --- Validation ---
+
+  it("returns 400 on invalid JSON", async () => {
+    const request = new Request("http://localhost/v1/batch", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Secret": TEST_SECRET,
+      },
+      body: "not json",
+    });
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(request, makeEnv(), ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when jds is missing", async () => {
+    const res = await postBatch({}, TEST_SECRET);
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when jds is not an array", async () => {
+    const res = await postBatch({ jds: 2451545.0 }, TEST_SECRET);
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when jds is empty", async () => {
+    const res = await postBatch({ jds: [] }, TEST_SECRET);
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when jds exceeds 500 entries", async () => {
+    const jds = Array.from({ length: 501 }, (_, i) => 2451545.0 + i);
+    const res = await postBatch({ jds }, TEST_SECRET);
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when a jd is out of range (too low)", async () => {
+    const res = await postBatch({ jds: [2378496] }, TEST_SECRET);
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when a jd is out of range (too high)", async () => {
+    const res = await postBatch({ jds: [2597642] }, TEST_SECRET);
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when a jd is not a number", async () => {
+    const res = await postBatch({ jds: ["abc"] }, TEST_SECRET);
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when a jd is NaN", async () => {
+    const res = await postBatch({ jds: [NaN] }, TEST_SECRET);
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when |lat| > 90", async () => {
+    const res = await postBatch(
+      { jds: [2451545.0], lat: 91, lon: 0 },
+      TEST_SECRET
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when |lon| > 180", async () => {
+    const res = await postBatch(
+      { jds: [2451545.0], lat: 0, lon: 181 },
+      TEST_SECRET
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 405 for GET requests", async () => {
+    const req = new Request("http://localhost/v1/batch", { method: "GET" });
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(req, makeEnv(), ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(405);
+  });
+
+  // --- Successful responses ---
+
+  it("returns results for a single JD without houses", async () => {
+    const res = await postBatch({ jds: [2451545.0] }, TEST_SECRET);
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as {
+      results: Array<{
+        jd: number;
+        positions: Record<string, unknown>;
+        gst: number;
+        houses?: unknown;
+      }>;
+    };
+
+    expect(data.results).toHaveLength(1);
+    expect(data.results[0].jd).toBe(2451545.0);
+    expect(Object.keys(data.results[0].positions)).toHaveLength(12);
+    expect(typeof data.results[0].gst).toBe("number");
+    expect(data.results[0].houses).toBeUndefined();
+  });
+
+  it("returns results for multiple JDs in order", async () => {
+    const jds = [2451545.0, 2451546.0, 2451547.0];
+    const res = await postBatch({ jds }, TEST_SECRET);
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as {
+      results: Array<{ jd: number }>;
+    };
+
+    expect(data.results).toHaveLength(3);
+    expect(data.results[0].jd).toBe(2451545.0);
+    expect(data.results[1].jd).toBe(2451546.0);
+    expect(data.results[2].jd).toBe(2451547.0);
+  });
+
+  it("includes houses when lat and lon are provided", async () => {
+    const res = await postBatch(
+      { jds: [2451545.0], lat: 36.16, lon: -86.78 },
+      TEST_SECRET
+    );
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as {
+      results: Array<{
+        jd: number;
+        houses?: { cusps: number[]; asc: number; mc: number };
+      }>;
+    };
+
+    expect(data.results).toHaveLength(1);
+    expect(data.results[0].houses).toBeDefined();
+    expect(data.results[0].houses!.cusps).toHaveLength(12);
+    expect(typeof data.results[0].houses!.asc).toBe("number");
+    expect(typeof data.results[0].houses!.mc).toBe("number");
+  });
+
+  it("batch results match individual /v1/chart results", async () => {
+    // Use golden entries to cross-check: batch should match chart
+    const samuelNatal = (golden as Record<string, GoldenEntry>)[
+      "samuel_natal"
+    ];
+    const transitJ2000 = (golden as Record<string, GoldenEntry>)[
+      "transit_2000-01-01"
+    ];
+
+    // Batch both JDs together (without houses since transit has none)
+    const batchRes = await postBatch(
+      { jds: [samuelNatal.jd, transitJ2000.jd] },
+      TEST_SECRET
+    );
+    expect(batchRes.status).toBe(200);
+
+    // Individual chart calls
+    const chartRes1 = await postChart({ jd: samuelNatal.jd }, TEST_SECRET);
+    const chartRes2 = await postChart({ jd: transitJ2000.jd }, TEST_SECRET);
+
+    const batchData = (await batchRes.json()) as {
+      results: Array<{
+        jd: number;
+        positions: Record<
+          string,
+          { lon: number; lat: number; speed: number; ra: number; decl: number }
+        >;
+        gst: number;
+      }>;
+    };
+    const chartData1 = (await chartRes1.json()) as {
+      positions: Record<
+        string,
+        { lon: number; lat: number; speed: number; ra: number; decl: number }
+      >;
+      gst: number;
+    };
+    const chartData2 = (await chartRes2.json()) as {
+      positions: Record<
+        string,
+        { lon: number; lat: number; speed: number; ra: number; decl: number }
+      >;
+      gst: number;
+    };
+
+    // First batch result should match first chart call exactly
+    for (const body of CONTRACT_BODIES) {
+      expect(batchData.results[0].positions[body].lon).toBe(
+        chartData1.positions[body].lon
+      );
+      expect(batchData.results[0].positions[body].speed).toBe(
+        chartData1.positions[body].speed
+      );
+      expect(batchData.results[0].positions[body].decl).toBe(
+        chartData1.positions[body].decl
+      );
+    }
+    expect(batchData.results[0].gst).toBe(chartData1.gst);
+
+    // Second batch result should match second chart call exactly
+    for (const body of CONTRACT_BODIES) {
+      expect(batchData.results[1].positions[body].lon).toBe(
+        chartData2.positions[body].lon
+      );
+      expect(batchData.results[1].positions[body].speed).toBe(
+        chartData2.positions[body].speed
+      );
+      expect(batchData.results[1].positions[body].decl).toBe(
+        chartData2.positions[body].decl
+      );
+    }
+    expect(batchData.results[1].gst).toBe(chartData2.gst);
+  });
+
+  it("accepts exactly 500 JDs", async () => {
+    // Generate 500 consecutive JDs starting from J2000
+    const jds = Array.from({ length: 500 }, (_, i) => 2451545.0 + i);
+    const res = await postBatch({ jds }, TEST_SECRET);
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as {
+      results: Array<{ jd: number }>;
+    };
+    expect(data.results).toHaveLength(500);
+    // Verify order is preserved
+    expect(data.results[0].jd).toBe(2451545.0);
+    expect(data.results[499].jd).toBe(2451545.0 + 499);
+  });
+
+  it("each result has all 12 bodies with full position fields", async () => {
+    const res = await postBatch({ jds: [2451545.0] }, TEST_SECRET);
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as {
+      results: Array<{
+        positions: Record<
+          string,
+          { lon: number; lat: number; speed: number; ra: number; decl: number }
+        >;
+      }>;
+    };
+
+    const pos = data.results[0].positions;
+    for (const body of CONTRACT_BODIES) {
+      expect(pos[body], `${body} missing`).toBeDefined();
+      expect(typeof pos[body].lon).toBe("number");
+      expect(typeof pos[body].lat).toBe("number");
+      expect(typeof pos[body].speed).toBe("number");
+      expect(typeof pos[body].ra).toBe("number");
+      expect(typeof pos[body].decl).toBe("number");
+    }
+  });
 });

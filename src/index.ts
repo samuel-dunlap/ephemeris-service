@@ -5,7 +5,8 @@
  * positions, declinations, and Placidus house cusps. Reached only via a
  * Cloudflare service binding (no public routes).
  *
- * POST /v1/chart   { jd, lat?, lon? }  → positions + optional houses
+ * POST /v1/chart   { jd, lat?, lon? }         → positions + optional houses
+ * POST /v1/batch   { jds[], lat?, lon? }      → array of positions + optional houses
  * GET  /v1/health  → { ok, swisseph, chiron }
  * GET  /v1/source  → { license, source }
  */
@@ -42,6 +43,15 @@ interface ChartRequest {
   lon?: number;
 }
 
+/** Maximum number of Julian Days in a single batch request. */
+const BATCH_MAX_JDS = 500;
+
+interface BatchRequest {
+  jds: number[];
+  lat?: number;
+  lon?: number;
+}
+
 function validateBody(body: unknown): body is ChartRequest {
   if (body === null || typeof body !== "object") return false;
   const obj = body as Record<string, unknown>;
@@ -49,6 +59,32 @@ function validateBody(body: unknown): body is ChartRequest {
   if (typeof obj.jd !== "number" || !Number.isFinite(obj.jd)) return false;
   if (obj.jd < JD_MIN || obj.jd > JD_MAX) return false;
 
+  if (obj.lat !== undefined) {
+    if (typeof obj.lat !== "number" || !Number.isFinite(obj.lat)) return false;
+    if (Math.abs(obj.lat) > 90) return false;
+  }
+
+  if (obj.lon !== undefined) {
+    if (typeof obj.lon !== "number" || !Number.isFinite(obj.lon)) return false;
+    if (Math.abs(obj.lon) > 180) return false;
+  }
+
+  return true;
+}
+
+function validateBatchBody(body: unknown): body is BatchRequest {
+  if (body === null || typeof body !== "object") return false;
+  const obj = body as Record<string, unknown>;
+
+  // jds must be an array of finite numbers within range, max BATCH_MAX_JDS
+  if (!Array.isArray(obj.jds)) return false;
+  if (obj.jds.length === 0 || obj.jds.length > BATCH_MAX_JDS) return false;
+  for (const jd of obj.jds) {
+    if (typeof jd !== "number" || !Number.isFinite(jd)) return false;
+    if (jd < JD_MIN || jd > JD_MAX) return false;
+  }
+
+  // Optional lat/lon — same validation as single chart
   if (obj.lat !== undefined) {
     if (typeof obj.lat !== "number" || !Number.isFinite(obj.lat)) return false;
     if (Math.abs(obj.lat) > 90) return false;
@@ -154,6 +190,89 @@ async function handleChart(
   return json(result);
 }
 
+async function handleBatch(
+  request: Request,
+  env: Env
+): Promise<Response> {
+  // --- Auth: fail closed when secret is unset ---
+  if (!env.INTERNAL_SECRET) {
+    return errorResponse("Service misconfigured: secret not set", 503);
+  }
+
+  const provided = request.headers.get("X-Internal-Secret");
+  if (provided !== env.INTERNAL_SECRET) {
+    return errorResponse("Unauthorized", 401);
+  }
+
+  // --- Parse and validate body ---
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse("Invalid JSON body", 400);
+  }
+
+  if (!validateBatchBody(body)) {
+    return errorResponse(
+      `Invalid body: requires { jds: number[] (1..${BATCH_MAX_JDS}, each ${JD_MIN}..${JD_MAX}), lat?: number (|lat|<=90), lon?: number (|lon|<=180) }`,
+      400
+    );
+  }
+
+  const { jds, lat, lon } = body;
+  const wantHouses = lat !== undefined && lon !== undefined;
+
+  // --- Compute all JDs ---
+  const results: Array<{
+    jd: number;
+    positions: Record<
+      string,
+      { lon: number; lat: number; speed: number; ra: number; decl: number }
+    >;
+    gst: number;
+    houses?: { cusps: number[]; asc: number; mc: number };
+  }> = [];
+
+  for (const jd of jds) {
+    const positions: Positions = await computePositions(jd);
+    const gst: number = await computeSiderealTime(jd);
+
+    // Shape positions to match the contract
+    const positionsOut: Record<
+      string,
+      { lon: number; lat: number; speed: number; ra: number; decl: number }
+    > = {};
+    for (const [name, pos] of Object.entries(positions)) {
+      positionsOut[name] = {
+        lon: pos.lon,
+        lat: pos.lat,
+        speed: pos.speed,
+        ra: pos.ra,
+        decl: pos.decl,
+      };
+    }
+
+    const entry: (typeof results)[number] = {
+      jd,
+      positions: positionsOut,
+      gst,
+    };
+
+    if (wantHouses) {
+      const houses: HouseCusps = await computeHouses(jd, lat!, lon!);
+      entry.houses = {
+        cusps: houses.cusps,
+        asc: houses.asc,
+        mc: houses.mc,
+      };
+    }
+
+    results.push(entry);
+  }
+
+  return json({ results });
+}
+
 async function handleHealth(): Promise<Response> {
   const version = await getVersion();
   const chiron = await hasChiron();
@@ -192,6 +311,11 @@ export default {
     // POST /v1/chart
     if (path === "/v1/chart" && request.method === "POST") {
       return handleChart(request, env);
+    }
+
+    // POST /v1/batch
+    if (path === "/v1/batch" && request.method === "POST") {
+      return handleBatch(request, env);
     }
 
     // Everything else
