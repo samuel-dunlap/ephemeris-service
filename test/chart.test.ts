@@ -54,7 +54,7 @@ interface GoldenEntry {
 const TEST_SECRET = "test-secret-12345";
 
 function makeEnv() {
-  return { INTERNAL_SECRET: TEST_SECRET };
+  return { INTERNAL_SECRET: TEST_SECRET, SOURCE_COMMIT: "test-commit-sha" };
 }
 
 async function postChart(
@@ -152,15 +152,19 @@ describe("GET /v1/health", () => {
 });
 
 describe("GET /v1/source", () => {
-  it("returns AGPL license info", async () => {
+  it("returns AGPL license info with source commit", async () => {
     const res = await getPath("/v1/source");
     expect(res.status).toBe(200);
     const data = (await res.json()) as {
       license: string;
       source: string;
+      sourceCommit: string;
     };
     expect(data.license).toBe("AGPL-3.0-or-later");
-    expect(typeof data.source).toBe("string");
+    expect(data.source).toBe(
+      "https://github.com/samuel-dunlap/ephemeris-service"
+    );
+    expect(data.sourceCommit).toBe("test-commit-sha");
   });
 });
 

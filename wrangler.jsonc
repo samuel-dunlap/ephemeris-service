@@ -13,6 +13,11 @@
   // INTERNAL_SECRET: set via `wrangler secret put INTERNAL_SECRET`
   // If unset at runtime the worker returns 503 on every request (fail closed).
 
+  // SOURCE_COMMIT: overridden at deploy time by deploy-all.sh via --var.
+  // The /v1/source endpoint exposes it so the running code and the public
+  // AGPL repo can be verified as the same commit.
+  "vars": { "SOURCE_COMMIT": "dev" },
+
   // Module rules for non-JS imports (also mirrored in vitest.config.ts):
   //  - .wasm → pre-compiled WebAssembly.Module
   //  - .se1  → ArrayBuffer (Swiss Ephemeris asteroid data)

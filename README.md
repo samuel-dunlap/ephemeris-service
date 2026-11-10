@@ -4,8 +4,11 @@ Swiss Ephemeris 2.10.03 compiled to WebAssembly, served as a Cloudflare Worker.
 Computes planetary positions, declinations, and Placidus house cusps for
 astrological chart calculations.
 
-This service is an internal microservice reached only via a Cloudflare service
-binding. It is not exposed to the public internet.
+**This is the AGPL-licensed component of [The Astrology Report](https://theastrologyreport.com).** No other part of the product is derived from this service. It is an isolated microservice reached via a Cloudflare service binding; the rest of the product communicates with it at arm's length.
+
+This repository is the public source mirror required by AGPL Section 13. The
+canonical source lives in the `ephemeris-service/` directory of the monorepo and
+is synced here automatically on every deploy.
 
 ## Contract
 
@@ -15,7 +18,7 @@ binding. It is not exposed to the public internet.
 Header: X-Internal-Secret: <secret>
 Body:   { "jd": number, "lat"?: number, "lon"?: number }
 
-200 → {
+200 -> {
   "positions": {
     "<Body>": { "lon": number, "lat": number, "speed": number, "decl": number }
     // Bodies: Sun, Moon, Mercury, Venus, Mars, Jupiter, Saturn,
@@ -35,6 +38,39 @@ Body:   { "jd": number, "lat"?: number, "lon"?: number }
 - Positions: apparent geocentric tropical ecliptic with speed (SEFLG_SPEED).
   Declination from a second equatorial calculation (SEFLG_EQUATORIAL).
 
+### POST /v1/batch
+
+```
+Header: X-Internal-Secret: <secret>
+Body:   { "jds": number[], "lat"?: number, "lon"?: number }
+
+200 -> { "results": Array<ChartResult> }
+```
+
+Up to 500 Julian Days per request. Each result matches the `/v1/chart` shape.
+
+### POST /v1/refine-crossings
+
+```
+Header: X-Internal-Secret: <secret>
+Body:   { "items": Array<RefinementItem> }
+
+200 -> { "results": Array<RefinementResult> }
+```
+
+Up to 200 items. Supports methods: newton, bisect, lunation-bisect, station-refine, sign-bisect.
+
+### POST /v1/batch-houses
+
+```
+Header: X-Internal-Secret: <secret>
+Body:   { "jd": number, "locations": Array<{ lat: number, lon: number }> }
+
+200 -> { "results": Array<HousesResult> }
+```
+
+Up to 50 locations per request.
+
 ### GET /v1/health
 
 ```json
@@ -44,11 +80,17 @@ Body:   { "jd": number, "lat"?: number, "lon"?: number }
 ### GET /v1/source
 
 ```json
-{ "license": "AGPL-3.0-or-later", "source": "https://github.com/samuel-dunlap/ephemeris-service" }
+{
+  "license": "AGPL-3.0-or-later",
+  "source": "https://github.com/samuel-dunlap/ephemeris-service",
+  "sourceCommit": "<sha>"
+}
 ```
 
-AGPL section 13 convenience: this endpoint names the license and points to the
-source repository.
+AGPL Section 13 convenience: this endpoint names the license, points to the
+source repository, and reports the exact commit the running Worker was built
+from. Compare `sourceCommit` against the HEAD of this repository to verify
+the published source matches the deployed service.
 
 ## Setup
 
@@ -84,12 +126,13 @@ npx wrangler deploy --dry-run --outdir=dist
 
 ## Architecture
 
-- `src/index.ts` — Worker entry point: routing, validation, authentication
-- `src/swisseph.ts` — thin wrapper over the C functions via Emscripten cwrap
-- `src/wasm/swisseph-glue.mjs` — patched Emscripten glue (accepts pre-compiled
+- `src/index.ts` -- Worker entry point: routing, validation, authentication
+- `src/swisseph.ts` -- thin wrapper over the C functions via Emscripten cwrap
+- `src/refinement.ts` -- refinement methods (newton, bisect, etc.) for crossing precision
+- `src/wasm/swisseph-glue.mjs` -- patched Emscripten glue (accepts pre-compiled
   WebAssembly.Module for workerd compatibility)
-- `src/wasm/swisseph.wasm` — Swiss Ephemeris 2.10.03 compiled to WebAssembly
-- `data/seas_18.se1` — asteroid ephemeris file for Chiron (1800-2399 CE)
+- `src/wasm/swisseph.wasm` -- Swiss Ephemeris 2.10.03 compiled to WebAssembly
+- `data/seas_18.se1` -- asteroid ephemeris file for Chiron (1800-2399 CE)
 
 The WASM module is loaded once per isolate via wrangler's CompiledWasm rule.
 The Chiron data file is bundled via wrangler's Data rule and written to the
@@ -97,8 +140,9 @@ Emscripten virtual filesystem (MEMFS) at init.
 
 ## License
 
-AGPL-3.0-or-later. See LICENSE.
+AGPL-3.0-or-later. See [LICENSE](LICENSE).
 
 This service holds no proprietary logic. All astronomical calculations are
 performed by Swiss Ephemeris. Published to satisfy the AGPL source-availability
-requirement.
+requirement. No other component of The Astrology Report is derived from this
+service.

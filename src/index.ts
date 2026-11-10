@@ -40,6 +40,8 @@ import {
 
 interface Env {
   INTERNAL_SECRET?: string;
+  /** Injected at deploy time by scripts/deploy-all.sh from the subtree split SHA. */
+  SOURCE_COMMIT?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -475,10 +477,11 @@ async function handleHealth(): Promise<Response> {
   return json({ ok: true, swisseph: version, chiron });
 }
 
-function handleSource(): Response {
+function handleSource(env: Env): Response {
   return json({
     license: "AGPL-3.0-or-later",
     source: "https://github.com/samuel-dunlap/ephemeris-service",
+    sourceCommit: env.SOURCE_COMMIT ?? "unknown",
   });
 }
 
@@ -567,7 +570,7 @@ export default {
 
     // GET /v1/source
     if (path === "/v1/source" && request.method === "GET") {
-      return handleSource();
+      return handleSource(env);
     }
 
     // POST /v1/chart
