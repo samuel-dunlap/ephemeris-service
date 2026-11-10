@@ -5,10 +5,12 @@
  * positions, declinations, and Placidus house cusps. Reached only via a
  * Cloudflare service binding (no public routes).
  *
- * POST /v1/chart   { jd, lat?, lon? }         → positions + optional houses
- * POST /v1/batch   { jds[], lat?, lon? }      → array of positions + optional houses
- * GET  /v1/health  → { ok, swisseph, chiron }
- * GET  /v1/source  → { license, source }
+ * POST /v1/chart              { jd, lat?, lon? }             → positions + optional houses
+ * POST /v1/batch              { jds[], lat?, lon? }          → array of positions + optional houses
+ * POST /v1/refine-crossings   { items[] }                    → refinement results (newton, bisect, etc.)
+ * POST /v1/batch-houses       { jd, locations[] }            → houses at multiple locations
+ * GET  /v1/health             → { ok, swisseph, chiron }
+ * GET  /v1/source             → { license, source }
  */
 
 import {
@@ -17,9 +19,20 @@ import {
   computeSiderealTime,
   getVersion,
   hasChiron,
+  BODY_NAMES,
   type Positions,
   type HouseCusps,
+  type BodyName,
 } from "./swisseph";
+
+import {
+  processItem,
+  batchComputeHouses,
+  REFINE_MAX_ITEMS,
+  BATCH_HOUSES_MAX,
+  type RefineCrossingItem,
+  type RefineCrossingKind,
+} from "./refinement";
 
 // ---------------------------------------------------------------------------
 // Environment bindings
@@ -96,6 +109,189 @@ function validateBatchBody(body: unknown): body is BatchRequest {
   }
 
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Refine-crossings validation
+// ---------------------------------------------------------------------------
+
+const VALID_REFINE_KINDS = new Set<RefineCrossingKind>([
+  "newton",
+  "bisect",
+  "lunation-bisect",
+  "station-refine",
+  "sign-bisect",
+]);
+
+const VALID_BODY_NAMES = new Set<string>(BODY_NAMES);
+
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
+}
+
+function isValidJd(jd: unknown): boolean {
+  return isFiniteNumber(jd) && jd >= JD_MIN && jd <= JD_MAX;
+}
+
+function validateRefineBody(
+  body: unknown,
+): { items: RefineCrossingItem[] } | string {
+  if (body === null || typeof body !== "object") return "Invalid body";
+  const obj = body as Record<string, unknown>;
+
+  if (!Array.isArray(obj.items)) return "items must be an array";
+  if (obj.items.length === 0 || obj.items.length > REFINE_MAX_ITEMS) {
+    return `items.length must be 1..${REFINE_MAX_ITEMS}`;
+  }
+
+  for (let i = 0; i < obj.items.length; i++) {
+    const item = obj.items[i];
+    if (item === null || typeof item !== "object") {
+      return `items[${i}]: must be an object`;
+    }
+    const it = item as Record<string, unknown>;
+
+    if (!VALID_REFINE_KINDS.has(it.kind as RefineCrossingKind)) {
+      return `items[${i}].kind: must be one of ${[...VALID_REFINE_KINDS].join(", ")}`;
+    }
+
+    const kind = it.kind as RefineCrossingKind;
+
+    // Per-kind required field validation
+    switch (kind) {
+      case "newton": {
+        if (!VALID_BODY_NAMES.has(it.body as string))
+          return `items[${i}].body: must be a valid body name`;
+        if (!isFiniteNumber(it.targetLon))
+          return `items[${i}].targetLon: required finite number`;
+        if (!isValidJd(it.approxJd))
+          return `items[${i}].approxJd: required valid JD (${JD_MIN}..${JD_MAX})`;
+        if (!isFiniteNumber(it.meanMotion) || it.meanMotion === 0)
+          return `items[${i}].meanMotion: required non-zero finite number`;
+        if (it.maxIter !== undefined && (!Number.isInteger(it.maxIter) || (it.maxIter as number) < 1))
+          return `items[${i}].maxIter: must be a positive integer`;
+        if (it.tolerance !== undefined && (!isFiniteNumber(it.tolerance) || (it.tolerance as number) <= 0))
+          return `items[${i}].tolerance: must be a positive number`;
+        break;
+      }
+      case "bisect": {
+        if (!VALID_BODY_NAMES.has(it.body as string))
+          return `items[${i}].body: must be a valid body name`;
+        if (!isFiniteNumber(it.targetLon))
+          return `items[${i}].targetLon: required finite number`;
+        if (!isValidJd(it.loJd))
+          return `items[${i}].loJd: required valid JD`;
+        if (!isValidJd(it.hiJd))
+          return `items[${i}].hiJd: required valid JD`;
+        if (it.bisectTolerance !== undefined && (!isFiniteNumber(it.bisectTolerance) || (it.bisectTolerance as number) <= 0))
+          return `items[${i}].bisectTolerance: must be a positive number`;
+        if (it.bisectMaxIter !== undefined && (!Number.isInteger(it.bisectMaxIter) || (it.bisectMaxIter as number) < 1))
+          return `items[${i}].bisectMaxIter: must be a positive integer`;
+        break;
+      }
+      case "lunation-bisect": {
+        if (!isValidJd(it.loJd))
+          return `items[${i}].loJd: required valid JD`;
+        if (!isValidJd(it.hiJd))
+          return `items[${i}].hiJd: required valid JD`;
+        if (it.elongTarget !== 0 && it.elongTarget !== 180)
+          return `items[${i}].elongTarget: must be 0 or 180`;
+        if (it.lunationMaxIter !== undefined && (!Number.isInteger(it.lunationMaxIter) || (it.lunationMaxIter as number) < 1))
+          return `items[${i}].lunationMaxIter: must be a positive integer`;
+        break;
+      }
+      case "station-refine": {
+        if (!VALID_BODY_NAMES.has(it.body as string))
+          return `items[${i}].body: must be a valid body name`;
+        if (!isValidJd(it.natalJd))
+          return `items[${i}].natalJd: required valid JD`;
+        if (!isFiniteNumber(it.loAge))
+          return `items[${i}].loAge: required finite number`;
+        if (!isFiniteNumber(it.hiAge))
+          return `items[${i}].hiAge: required finite number`;
+        if (it.subStep !== undefined && (!isFiniteNumber(it.subStep) || (it.subStep as number) <= 0))
+          return `items[${i}].subStep: must be a positive number`;
+        if (it.stationBisectIters !== undefined && (!Number.isInteger(it.stationBisectIters) || (it.stationBisectIters as number) < 1))
+          return `items[${i}].stationBisectIters: must be a positive integer`;
+        // Validate that computed JDs (natalJd + loAge, natalJd + hiAge) are in range
+        const stLoJd = (it.natalJd as number) + (it.loAge as number);
+        const stHiJd = (it.natalJd as number) + (it.hiAge as number);
+        if (stLoJd < JD_MIN || stLoJd > JD_MAX)
+          return `items[${i}]: natalJd + loAge (${stLoJd}) out of JD range`;
+        if (stHiJd < JD_MIN || stHiJd > JD_MAX)
+          return `items[${i}]: natalJd + hiAge (${stHiJd}) out of JD range`;
+        break;
+      }
+      case "sign-bisect": {
+        if (!VALID_BODY_NAMES.has(it.body as string))
+          return `items[${i}].body: must be a valid body name`;
+        if (!isValidJd(it.natalJd))
+          return `items[${i}].natalJd: required valid JD`;
+        if (!isFiniteNumber(it.loAge))
+          return `items[${i}].loAge: required finite number`;
+        if (!isFiniteNumber(it.hiAge))
+          return `items[${i}].hiAge: required finite number`;
+        if (!Number.isInteger(it.targetSign) || (it.targetSign as number) < 0 || (it.targetSign as number) > 11)
+          return `items[${i}].targetSign: must be an integer 0..11`;
+        if (it.bisectMaxIter !== undefined && (!Number.isInteger(it.bisectMaxIter) || (it.bisectMaxIter as number) < 1))
+          return `items[${i}].bisectMaxIter: must be a positive integer`;
+        // Validate computed JDs
+        const sbLoJd = (it.natalJd as number) + (it.loAge as number);
+        const sbHiJd = (it.natalJd as number) + (it.hiAge as number);
+        if (sbLoJd < JD_MIN || sbLoJd > JD_MAX)
+          return `items[${i}]: natalJd + loAge (${sbLoJd}) out of JD range`;
+        if (sbHiJd < JD_MIN || sbHiJd > JD_MAX)
+          return `items[${i}]: natalJd + hiAge (${sbHiJd}) out of JD range`;
+        break;
+      }
+    }
+  }
+
+  return { items: obj.items as RefineCrossingItem[] };
+}
+
+// ---------------------------------------------------------------------------
+// Batch-houses validation
+// ---------------------------------------------------------------------------
+
+interface BatchHousesRequest {
+  jd: number;
+  locations: Array<{ lat: number; lon: number }>;
+}
+
+function validateBatchHousesBody(
+  body: unknown,
+): BatchHousesRequest | string {
+  if (body === null || typeof body !== "object") return "Invalid body";
+  const obj = body as Record<string, unknown>;
+
+  if (!isValidJd(obj.jd)) {
+    return `jd: required valid JD (${JD_MIN}..${JD_MAX})`;
+  }
+
+  if (!Array.isArray(obj.locations)) return "locations must be an array";
+  if (obj.locations.length === 0 || obj.locations.length > BATCH_HOUSES_MAX) {
+    return `locations.length must be 1..${BATCH_HOUSES_MAX}`;
+  }
+
+  for (let i = 0; i < obj.locations.length; i++) {
+    const loc = obj.locations[i];
+    if (loc === null || typeof loc !== "object") {
+      return `locations[${i}]: must be an object`;
+    }
+    const l = loc as Record<string, unknown>;
+    if (!isFiniteNumber(l.lat) || Math.abs(l.lat) > 90) {
+      return `locations[${i}].lat: required, |lat| <= 90`;
+    }
+    if (!isFiniteNumber(l.lon) || Math.abs(l.lon) > 180) {
+      return `locations[${i}].lon: required, |lon| <= 180`;
+    }
+  }
+
+  return {
+    jd: obj.jd as number,
+    locations: obj.locations as Array<{ lat: number; lon: number }>,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -286,6 +482,72 @@ function handleSource(): Response {
   });
 }
 
+async function handleRefineCrossings(
+  request: Request,
+  env: Env
+): Promise<Response> {
+  // --- Auth ---
+  if (!env.INTERNAL_SECRET) {
+    return errorResponse("Service misconfigured: secret not set", 503);
+  }
+  const provided = request.headers.get("X-Internal-Secret");
+  if (provided !== env.INTERNAL_SECRET) {
+    return errorResponse("Unauthorized", 401);
+  }
+
+  // --- Parse and validate body ---
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse("Invalid JSON body", 400);
+  }
+
+  const validated = validateRefineBody(body);
+  if (typeof validated === "string") {
+    return errorResponse(validated, 400);
+  }
+
+  // --- Process each item independently ---
+  const results = [];
+  for (const item of validated.items) {
+    results.push(await processItem(item));
+  }
+
+  return json({ results });
+}
+
+async function handleBatchHouses(
+  request: Request,
+  env: Env
+): Promise<Response> {
+  // --- Auth ---
+  if (!env.INTERNAL_SECRET) {
+    return errorResponse("Service misconfigured: secret not set", 503);
+  }
+  const provided = request.headers.get("X-Internal-Secret");
+  if (provided !== env.INTERNAL_SECRET) {
+    return errorResponse("Unauthorized", 401);
+  }
+
+  // --- Parse and validate body ---
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse("Invalid JSON body", 400);
+  }
+
+  const validated = validateBatchHousesBody(body);
+  if (typeof validated === "string") {
+    return errorResponse(validated, 400);
+  }
+
+  // --- Compute houses for all locations ---
+  const results = await batchComputeHouses(validated.jd, validated.locations);
+  return json({ results });
+}
+
 // ---------------------------------------------------------------------------
 // Worker entry
 // ---------------------------------------------------------------------------
@@ -316,6 +578,16 @@ export default {
     // POST /v1/batch
     if (path === "/v1/batch" && request.method === "POST") {
       return handleBatch(request, env);
+    }
+
+    // POST /v1/refine-crossings
+    if (path === "/v1/refine-crossings" && request.method === "POST") {
+      return handleRefineCrossings(request, env);
+    }
+
+    // POST /v1/batch-houses
+    if (path === "/v1/batch-houses" && request.method === "POST") {
+      return handleBatchHouses(request, env);
     }
 
     // Everything else
