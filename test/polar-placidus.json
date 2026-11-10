@@ -1,0 +1,55 @@
+{
+  "generatedBy": "scripts/placidus-house-crosscheck.py",
+  "pyswisseph": "2.10.03",
+  "rule": "Swiss Ephemeris computes Placidus only when |lat| < 90 - true obliquity; otherwise swe_houses_ex2 returns ERR with Porphyry cusps",
+  "hartford": {
+    "jd": 2453076.1805555555,
+    "lat": 41.7658,
+    "lon": -72.6734,
+    "placidus": true
+  },
+  "polar": {
+    "place": "Murmansk",
+    "utc": "2004-03-11T16:20:00Z",
+    "lat": 68.97917,
+    "lon": 33.09251,
+    "jd": 2453076.1805555555,
+    "trueObliquity": 23.440722079029392,
+    "polarCircleLat": 66.5592779209706,
+    "placidus": false,
+    "porphyryCusps": [
+      178.849949,
+      208.54645,
+      238.242951,
+      267.939452,
+      298.242951,
+      328.54645,
+      358.849949,
+      28.54645,
+      58.242951,
+      87.939452,
+      118.242951,
+      148.54645
+    ],
+    "asc": 178.849949,
+    "mc": 87.939452,
+    "boundary": [
+      {
+        "lat": 66.5592769209706,
+        "placidus": true
+      },
+      {
+        "lat": -66.5592769209706,
+        "placidus": true
+      },
+      {
+        "lat": 66.5592789209706,
+        "placidus": false
+      },
+      {
+        "lat": -66.5592789209706,
+        "placidus": false
+      }
+    ]
+  }
+}

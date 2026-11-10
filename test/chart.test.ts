@@ -17,6 +17,7 @@ import {
 import { describe, it, expect, beforeAll } from "vitest";
 import worker from "../src/index";
 import golden from "./golden.json";
+import polarRef from "./polar-placidus.json";
 
 // ---------------------------------------------------------------------------
 // Types matching golden.json shape
@@ -689,5 +690,71 @@ describe("POST /v1/batch", () => {
       expect(typeof pos[body].ra).toBe("number");
       expect(typeof pos[body].decl).toBe("number");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A11: inside the polar circle Swiss Ephemeris cannot compute Placidus houses.
+// swe_houses_ex2 then returns an error code with Porphyry cusps, and every
+// endpoint says so with houses.placidus === false. Reference values:
+// scripts/placidus-house-crosscheck.py (pyswisseph) -> polar-placidus.json.
+// ---------------------------------------------------------------------------
+
+describe("A11 — houses.placidus is Swiss Ephemeris's own answer", () => {
+  type Houses = { cusps: number[]; asc: number; mc: number; placidus: boolean };
+  const { hartford, polar } = polarRef;
+
+  async function housesAt(jd: number, lat: number, lon: number): Promise<Houses> {
+    const res = await postChart({ jd, lat, lon }, TEST_SECRET);
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { houses: Houses }).houses;
+  }
+
+  it("the reference is what the script says it is", () => {
+    expect(polarRef.pyswisseph).toBe("2.10.03");
+    expect(hartford.placidus).toBe(true);
+    expect(polar.placidus).toBe(false);
+    expect(Math.abs(polar.lat)).toBeGreaterThan(polar.polarCircleLat);
+  });
+
+  it("Hartford: Placidus is computed (placidus: true)", async () => {
+    expect((await housesAt(hartford.jd, hartford.lat, hartford.lon)).placidus).toBe(true);
+  });
+
+  it("Murmansk: placidus is false and the cusps are Porphyry's, as pyswisseph returns them", async () => {
+    const houses = await housesAt(polar.jd, polar.lat, polar.lon);
+    expect(houses.placidus).toBe(false);
+    polar.porphyryCusps.forEach((c, i) => {
+      expect(Math.abs(houses.cusps[i] - c), `cusp ${i + 1}`).toBeLessThan(1e-6);
+    });
+  });
+
+  it("at the polar circle, in both hemispheres, the flag switches where Swiss Ephemeris switches", async () => {
+    expect(polar.boundary.map((b) => b.placidus).sort()).toEqual([false, false, true, true]);
+    for (const b of polar.boundary) {
+      expect((await housesAt(polar.jd, b.lat, polar.lon)).placidus, `lat ${b.lat}`).toBe(b.placidus);
+    }
+  });
+
+  it("/v1/batch and /v1/batch-houses carry the same flag", async () => {
+    const batch = await postBatch({ jds: [polar.jd], lat: polar.lat, lon: polar.lon }, TEST_SECRET);
+    expect(batch.status).toBe(200);
+    const batchData = (await batch.json()) as { results: Array<{ houses: Houses }> };
+    expect(batchData.results[0].houses.placidus).toBe(false);
+
+    const request = new Request("http://localhost/v1/batch-houses", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Internal-Secret": TEST_SECRET },
+      body: JSON.stringify({
+        jd: polar.jd,
+        locations: [{ lat: hartford.lat, lon: hartford.lon }, { lat: polar.lat, lon: polar.lon }],
+      }),
+    });
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(request, makeEnv(), ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as { results: Array<{ houses: Houses }> };
+    expect(data.results.map((r) => r.houses.placidus)).toEqual([true, false]);
   });
 });

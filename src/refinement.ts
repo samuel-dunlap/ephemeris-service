@@ -330,7 +330,7 @@ export async function signBisect(
 export interface BatchHousesResult {
   lat: number;
   lon: number;
-  houses: { cusps: number[]; asc: number; mc: number };
+  houses: { cusps: number[]; asc: number; mc: number; placidus: boolean };
 }
 
 export async function batchComputeHouses(
@@ -347,6 +347,7 @@ export async function batchComputeHouses(
         cusps: houses.cusps,
         asc: houses.asc,
         mc: houses.mc,
+        placidus: houses.placidus,
       },
     });
   }

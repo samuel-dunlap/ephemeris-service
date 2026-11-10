@@ -27,7 +27,9 @@ Body:   { "jd": number, "lat"?: number, "lon"?: number }
   "houses"?: {
     "cusps": number[12],  // index 0 = house 1 = asc
     "asc": number,
-    "mc": number
+    "mc": number,
+    "placidus": boolean   // false inside the polar circle: Swiss Ephemeris
+                          // could not compute Placidus and the cusps are Porphyry
   }
 }
 ```

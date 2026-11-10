@@ -72,6 +72,13 @@ export interface HouseCusps {
   cusps: number[];
   asc: number;
   mc: number;
+  /**
+   * False when Swiss Ephemeris could not compute Placidus houses here: inside
+   * the polar circle (|lat| >= 90 degrees minus the true obliquity)
+   * swe_houses_ex2 returns an error code with Porphyry cusps ("within polar
+   * circle, switched to Porphyry"). The cusps are then not Placidus cusps.
+   */
+  placidus: boolean;
 }
 
 export type Positions = Record<BodyName, BodyPosition>;
@@ -319,7 +326,9 @@ export async function computeHouses(
   const raw = readDoubles(em, bufCusps, HOUSE_COUNT + 1);
   const cusps = raw.slice(1, HOUSE_COUNT + 1);
 
-  // Check for hard error (ret < 0 AND cusps all zero)
+  // Hard error: ret < 0 with no cusps. ret < 0 WITH cusps is Swiss Ephemeris's
+  // polar fallback: it could not compute Placidus and returned Porphyry cusps,
+  // which the response says with placidus: false (decision A11).
   const filled = cusps.some((v) => v !== 0);
   if (ret < 0 && !filled) {
     const msg = readError(em, bufError);
@@ -332,6 +341,7 @@ export async function computeHouses(
     cusps,
     asc: ascmc[0],
     mc: ascmc[1],
+    placidus: ret >= 0,
   };
 }
 

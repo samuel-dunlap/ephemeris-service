@@ -374,7 +374,7 @@ async function handleChart(
   const result: {
     positions: typeof positionsOut;
     gst: number;
-    houses?: { cusps: number[]; asc: number; mc: number };
+    houses?: { cusps: number[]; asc: number; mc: number; placidus: boolean };
   } = { positions: positionsOut, gst };
 
   if (houses) {
@@ -382,6 +382,7 @@ async function handleChart(
       cusps: houses.cusps,
       asc: houses.asc,
       mc: houses.mc,
+      placidus: houses.placidus,
     };
   }
 
@@ -428,7 +429,7 @@ async function handleBatch(
       { lon: number; lat: number; speed: number; ra: number; decl: number }
     >;
     gst: number;
-    houses?: { cusps: number[]; asc: number; mc: number };
+    houses?: { cusps: number[]; asc: number; mc: number; placidus: boolean };
   }> = [];
 
   for (const jd of jds) {
@@ -462,6 +463,7 @@ async function handleBatch(
         cusps: houses.cusps,
         asc: houses.asc,
         mc: houses.mc,
+        placidus: houses.placidus,
       };
     }
 
